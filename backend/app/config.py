@@ -19,14 +19,20 @@ class Settings(BaseSettings):
     jwt_refresh_expire_days: int = 30
 
     # Apple Sign In
-    apple_bundle_id: str = "com.kidschores.app"
+    apple_bundle_id: str = "com.klsingh.KidsChores"
     apple_team_id: str = ""
     apple_key_id: str = ""
     apple_private_key_path: str = ""
 
-    # APNs
-    apns_bundle_id: str = "com.kidschores.app"
+    # APNs — token-based auth (Auth Key, not a certificate). Unset in any of
+    # these three means "not configured": push.py falls back to logging
+    # instead of sending, so local dev / a not-yet-enrolled Apple Developer
+    # account never blocks anything.
+    apns_bundle_id: str = "com.klsingh.KidsChores"
     apns_env: str = "sandbox"  # "sandbox" | "production"
+    apns_team_id: str = ""
+    apns_key_id: str = ""
+    apns_private_key: str = ""  # PEM content of the .p8 Auth Key, not a file path
 
     # App
     app_env: str = "development"

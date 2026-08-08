@@ -19,6 +19,9 @@ htmlcov/
 # Celery beat local schedule persistence (runtime state, not source)
 celerybeat-schedule*
 
+# Local Redis RDB snapshot (written to CWD by a locally-run redis-server)
+dump.rdb
+
 # macOS
 .DS_Store
 

@@ -29,6 +29,7 @@ from app.schemas.schemas import (
 )
 from app.services.idempotency import run_idempotent
 from app.services.ledger import LedgerService
+from app.services.notifications import notify_excuse_resolved, notify_new_excuse
 from app.services.series_completion import SeriesCompletionService
 from app.services.state_machine import InvalidTransitionError, StateMachineService
 
@@ -91,8 +92,9 @@ async def _get_instance_or_404(
             TaskDefinition.household_id == household.id,
         )
         # award_task_completion / award_excuse_if_policy read instance.definition.title;
-        # without eager loading, that lazy load fails under async SQLAlchemy.
-        .options(selectinload(TaskInstance.definition))
+        # notify_excuse_resolved/notify_task_reminder read instance.assignee.push_token —
+        # without eager loading, either lazy load fails under async SQLAlchemy.
+        .options(selectinload(TaskInstance.definition), selectinload(TaskInstance.assignee))
     )
     instance = result.scalar_one_or_none()
     if instance is None:
@@ -222,9 +224,14 @@ async def excuse_task(
     async def _do() -> TaskInstance:
         sm = _get_services(db)
         try:
-            return await sm.submit_excuse(instance, member, body.excuse_text)
+            result = await sm.submit_excuse(instance, member, body.excuse_text)
         except (InvalidTransitionError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # Inside the idempotent handler so a retried request doesn't re-notify.
+        await notify_new_excuse(
+            db, household.id, member.display_name, instance.definition.title
+        )
+        return result
 
     return await _idempotent(member, body.idempotency_key, _do)
 
@@ -247,9 +254,12 @@ async def review_task(
             if instance.status == TaskStatus.review_pending:
                 return await sm.review(instance, parent, household, body.approve, body.comment)
             elif instance.status == TaskStatus.excuse_pending:
-                return await sm.resolve_excuse(
+                result = await sm.resolve_excuse(
                     instance, parent, household, body.approve, body.comment
                 )
+                # Inside the idempotent handler so a retried request doesn't re-notify.
+                await notify_excuse_resolved(result, body.approve)
+                return result
             raise HTTPException(
                 status_code=422,
                 detail=f"Task is not pending review (status: {instance.status}).",

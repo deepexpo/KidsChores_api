@@ -27,6 +27,7 @@ from app.schemas.schemas import (
     EmailLoginRequest,
     EmailRegisterRequest,
     LinkAccountRequest,
+    PushTokenUpdate,
     RefreshTokenRequest,
     TokenResponse,
 )
@@ -384,4 +385,22 @@ async def change_password(
         )
 
     member.password_hash = hash_password(body.new_password)
+    db.add(member)
+
+
+@router.patch("/push-token", status_code=status.HTTP_204_NO_CONTENT)
+async def update_push_token(
+    body: PushTokenUpdate,
+    member: Member = Depends(get_current_member),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """
+    Registers (or, with a null body, clears) this member's APNs device token.
+    Call on launch after requesting notification permission, and on
+    logout/uninstall detection to clear it — a stale token just means a
+    silently-dropped push (push.py logs and moves on), not an error, but
+    clearing it on logout avoids notifying whoever's device it ends up on
+    next if the token were somehow reused.
+    """
+    member.push_token = body.push_token
     db.add(member)

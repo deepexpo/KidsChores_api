@@ -120,6 +120,11 @@ class Household(Base):
         default=ExcusedPayoutPolicy.excused_pays_nothing,
     )
     grace_period_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
+    # PRD §6.7 P0: "Teen: reminder at a configurable time before a task's due
+    # time." Household-scoped, same pattern as grace_period_hours.
+    task_reminder_minutes_before_due: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=60
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -295,6 +300,12 @@ class TaskInstance(Base):
     series_instance_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("series_instances.id", ondelete="SET NULL"), nullable=True
     )
+    # Set once the due-soon reminder push has fired for this instance — the
+    # reminder job runs on a short interval (workers/reminders.py) and must
+    # not re-notify on every tick while an instance sits inside the lead window.
+    reminder_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     definition: Mapped["TaskDefinition"] = relationship(back_populates="instances")
     assignee: Mapped["Member"] = relationship(
@@ -364,6 +375,11 @@ class SeriesInstance(Base):
         default=SeriesStatus.active,
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set once the "expiring soon with tasks outstanding" push has fired
+    # (PRD §6.7 P1) — same single-fire-per-window guard as reminder_sent_at.
+    expiring_reminder_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     series: Mapped["Series"] = relationship(back_populates="instances")
     task_instances: Mapped[list["TaskInstance"]] = relationship(back_populates="series_instance")

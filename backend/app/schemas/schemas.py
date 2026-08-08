@@ -56,6 +56,12 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(min_length=8)
 
 
+class PushTokenUpdate(BaseModel):
+    """`push_token: null` unregisters the device (e.g. on logout/uninstall)."""
+
+    push_token: str | None = Field(None, max_length=500)
+
+
 # ── Household ─────────────────────────────────────────────────────────────────
 
 class HouseholdCreate(BaseModel):
@@ -71,6 +77,7 @@ class HouseholdResponse(BaseModel):
     points_label: str
     excused_payout_policy: ExcusedPayoutPolicy
     grace_period_hours: int
+    task_reminder_minutes_before_due: int
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -82,6 +89,9 @@ class HouseholdUpdate(BaseModel):
     points_label: str | None = None
     excused_payout_policy: ExcusedPayoutPolicy | None = None
     grace_period_hours: int | None = Field(None, ge=1, le=72)
+    # Capped at 24h — workers/reminders.py's due-soon query window assumes no
+    # household configures a longer lead time than that.
+    task_reminder_minutes_before_due: int | None = Field(None, ge=5, le=1440)
 
 
 # ── Member ────────────────────────────────────────────────────────────────────

@@ -60,6 +60,7 @@ The kind of thing that only shows up once code is exercised for real, not just r
 | Ambiguous SQLAlchemy relationship (two FKs to the same table) | `Member` ↔ `TaskInstance`/`LedgerEntry` | The ORM refused to configure at all — nothing using the database could have worked |
 | Missing eager-load under async SQLAlchemy | task completion → ledger write | `MissingGreenlet` on the very first real "complete a task" call — the core product loop was broken until this was fixed |
 | No household scoping on claim resolution | `POST /v1/wallet/claims/{id}/resolve` | A parent could resolve a reward claim belonging to a *different* household by id |
+| Async SQLAlchemy engine reused across event loops | Celery worker, any periodic task's 2nd+ run | A persistent worker process calling `asyncio.run()` per task invocation crashed with "Future attached to a different loop" on the second run of *any* scheduled job — invisible until a job actually ran twice in the same worker's lifetime, which a 15-minute-interval reminder job hits almost immediately |
 
 Every one of these was invisible from reading the code casually. They only surfaced by actually
 standing up Postgres + Redis and driving real requests through the state machine end to end.
@@ -109,7 +110,8 @@ stateDiagram-v2
 |---|---|---|
 | Backend API | FastAPI (Python 3.12), SQLAlchemy 2.0 async | fully async end-to-end, `asyncpg` driver |
 | Database | PostgreSQL 16 | partial unique indexes for idempotency; Alembic migrations |
-| Job queue | Celery + Redis (Upstash in prod) | nightly instance generation, parent-nudge digest |
+| Job queue | Celery + Redis (Upstash in prod) | nightly instance generation, notification scheduling |
+| Push | APNs, token-based Auth Key | 5 notification types (PRD §6.7), config-gated — logs instead of sending if unconfigured |
 | Auth | Email + password (argon2id) — Sign in with Apple implemented, deferred client-side | JWT access + rotating single-use refresh tokens |
 | Hosting | Fly.io | see [`backend/fly.toml`](backend/fly.toml) |
 | iOS client | SwiftUI, iOS 17+ (spec complete, not yet built) | full UI/UX spec in [`docs/ios-prd.md`](docs/ios-prd.md) |
@@ -239,7 +241,8 @@ exact same generation function the nightly job calls, so there's no drift betwee
 |---|---|
 | Core backend — household, definitions, instances, state machine, ledger, wallet | ✅ Done |
 | Excuse/approval flow, series (both payout modes), claims, reports | ✅ Done |
-| Email/password auth, PIN verification, deployed to Fly.io | ✅ Done |
-| Sign in with Apple, push notifications | Implemented server-side, deferred client-side |
+| Email/password auth, PIN verification, teen account linking, deployed to Fly.io | ✅ Done |
+| Push notifications — APNs, all 5 PRD §6.7 types | ✅ Done |
+| Sign in with Apple | Implemented server-side, deferred client-side |
 | iOS client (SwiftUI) | Spec complete ([`docs/ios-prd.md`](docs/ios-prd.md)), not yet built |
 | Savings goals UI, reward menu, teen task proposals | Backend groundwork in place |

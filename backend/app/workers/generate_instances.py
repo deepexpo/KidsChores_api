@@ -21,7 +21,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.database import AsyncSessionLocal
+from app.db.database import AsyncSessionLocal, run_and_dispose
 from app.db.models import (
     Household,
     ScheduleType,
@@ -37,7 +37,7 @@ GENERATION_HORIZON_DAYS = 14
 
 @celery_app.task(name="workers.generate_instances")  # type: ignore[untyped-decorator]
 def generate_instances_task() -> None:
-    asyncio.run(_generate_all_households())
+    asyncio.run(run_and_dispose(_generate_all_households()))
 
 
 async def _generate_all_households() -> None:

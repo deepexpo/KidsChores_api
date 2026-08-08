@@ -12,8 +12,9 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.db.database import AsyncSessionLocal
+from app.db.database import AsyncSessionLocal, run_and_dispose
 from app.db.models import Household, Member, MemberRole, TaskDefinition, TaskInstance, TaskStatus
+from app.services.notifications import notify_pending_approvals
 from app.workers.celery_app import celery_app
 
 NUDGE_AFTER_HOURS = 24
@@ -21,7 +22,7 @@ NUDGE_AFTER_HOURS = 24
 
 @celery_app.task(name="workers.notify_digest")  # type: ignore[untyped-decorator]
 def notify_digest_task() -> None:
-    asyncio.run(_send_digests())
+    asyncio.run(run_and_dispose(_send_digests()))
 
 
 async def _send_digests() -> None:
@@ -67,18 +68,4 @@ async def _send_digests() -> None:
             )
 
             for parent in parents:
-                assert parent.push_token is not None  # query filtered on push_token IS NOT NULL
-                await _send_push(
-                    token=parent.push_token,
-                    title="Approvals waiting",
-                    body=f"You have {count} item{'s' if count != 1 else ''} "
-                         "waiting for your review.",
-                )
-
-
-async def _send_push(token: str, title: str, body: str) -> None:
-    """Send an APNs push notification. Stub — replace with aioapns in production."""
-    # TODO: integrate aioapns
-    # async with aiohttp.ClientSession() as session:
-    #     await apns_client.send_notification(token, title=title, body=body)
-    print(f"[PUSH] → {token[:20]}… | {title}: {body}")
+                await notify_pending_approvals(parent, count)

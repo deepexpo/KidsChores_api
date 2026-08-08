@@ -191,7 +191,8 @@ Any member. Returns the caller's household.
 {
   "id": "33e2a92a-...", "name": "Test Family", "timezone": "America/Los_Angeles",
   "points_label": "points", "excused_payout_policy": "excused_pays_nothing",
-  "grace_period_hours": 24, "created_at": "2026-08-01T14:50:56Z"
+  "grace_period_hours": 24, "task_reminder_minutes_before_due": 60,
+  "created_at": "2026-08-01T14:50:56Z"
 }
 ```
 
@@ -202,7 +203,8 @@ this instead of a hardcoded string; per the PRD's design thesis, never style it 
 Parent only. Partial update — send only fields you're changing.
 
 Body (all optional): `name`, `timezone`, `points_label`, `excused_payout_policy`,
-`grace_period_hours` (int, 1–72).
+`grace_period_hours` (int, 1–72), `task_reminder_minutes_before_due` (int, 5–1440, default 60 —
+lead time for the teen due-soon push, §14).
 
 ### `GET /v1/household/members?include_archived=false`
 Any member. Lists everyone in the household (parents and teens). Archived (removed) members are
@@ -703,6 +705,7 @@ client-side.
 | POST | `/v1/auth/login` | none | no (rate-limited) |
 | POST | `/v1/auth/refresh` | none (bearer refresh token in body) | — (single-use by design) |
 | POST | `/v1/auth/change-password` | any (authenticated) | no (rate-limited) |
+| PATCH | `/v1/auth/push-token` | any (authenticated) | — |
 | POST | `/v1/auth/apple` | none | — |
 | POST | `/v1/auth/link` | none | — (rate-limited, code single-use) |
 | GET | `/v1/household` | any | — |
@@ -746,13 +749,49 @@ client-side.
   On `complete`/`excuse`/`cancel`, write the optimistic state locally immediately, queue the
   request with its idempotency key, and reconcile on response — see `docs/ios-prd.md §12` for the
   full offline/sync design.
-- **Poll, don't assume push works yet.** No push-notification-sending code exists server-side yet
-  beyond a `print()` stub in the Celery worker (`notify_digest.py`) — build the inbox/today views
-  to refresh on foreground and via pull-to-refresh; don't architect around push arriving reliably
-  in v0.1.
+- **Push is real, but still treat it as best-effort.** APNs delivery is implemented server-side
+  (§14) — register a device token and the 5 PRD §6.7 notification types fire for real. Still build
+  the inbox/today views to refresh on foreground and via pull-to-refresh: a push can be delayed,
+  dropped by Apple, or arrive while the app is killed, same as any push-based UX.
 - **Cache `GET /v1/definitions` client-side** and join on `definition_id` to work around the
   `title`/`description` gap (§7) — refresh this cache whenever a definition-management screen is
   used, since it changes rarely compared to task instances.
 - **Decode the JWT client-side** to read `exp` and proactively call `POST /v1/auth/refresh`
   (§1.4) before expiry rather than reactively handling 401s mid-flow, which is a worse UX for a
   teen mid-task-completion. Always persist the rotated `refresh_token` from the refresh response.
+
+---
+
+## 14. Push notifications (PRD §6.7)
+
+APNs delivery via a token-based Auth Key (`app/services/push.py`). Sends fail silently into a log
+line rather than raising — a push failure never blocks the request/job that triggered it, and if
+`APNS_TEAM_ID`/`APNS_KEY_ID`/`APNS_PRIVATE_KEY` aren't configured on the server, every notification
+just logs instead of sending (harmless in any environment that hasn't set them up).
+
+### `PATCH /v1/auth/push-token`
+
+Any authenticated member. `204`.
+
+```json
+{ "push_token": "a1b2c3…" }
+```
+
+Call after requesting notification permission and obtaining the APNs device token from
+`didRegisterForRemoteNotificationsWithDeviceToken`. Call again with `{ "push_token": null }` on
+logout/uninstall-detection to unregister.
+
+### Notification types and triggers
+
+| # | PRD priority | Recipient | Trigger | Copy |
+|---|---|---|---|---|
+| 1 | P0 | Teen | Task reminder, configurable lead time before `due_at` (household setting, §5 `task_reminder_minutes_before_due`, 5–1440 min, default 60) | "Task due soon" / `"{title}" is due soon.` |
+| 2 | P0 | Parent | Teen submits an excuse (`POST /v1/tasks/instances/{id}/excuse`) | "New excuse submitted" / `{teen} submitted an excuse for "{title}".` |
+| 3 | P0 | Teen | Parent resolves an excuse (`POST /v1/tasks/instances/{id}/review` on an `excuse_pending` instance) | "Excuse approved"/"Excuse denied" / `Your excuse for "{title}" was approved/denied.` |
+| 4 | P1 | Parent | Daily digest — approvals pending > 24h (unchanged from before, now sends for real) | "Approvals waiting" / `You have N item(s) waiting for your review.` |
+| 5 | P1 | Teen | Series window ending within 24h with at least one task still outstanding | "Series ending soon" / `"{series}" ends soon — finish up to keep the bonus.` |
+
+Types 1 and 5 run on a Celery beat schedule (every 15 min / every 6h respectively) and fire at most
+once per instance/window (`reminder_sent_at` / `expiring_reminder_sent_at`), so re-running the job
+doesn't re-notify. Types 2 and 3 fire synchronously inside the triggering request, inside the same
+idempotency-key guard as the state change itself — a retried request doesn't double-notify either.

@@ -61,7 +61,7 @@ a 15-year-old would not be embarrassed to have a friend see open on their phone.
 | Auth | Email + password (current), `POST /v1/auth/{register,login,refresh}` — [`docs/auth-endpoints.md`](./auth-endpoints.md) | Sign in with Apple is implemented server-side (master PRD §11.1) but **deferred client-side** to a later phase; see §5. |
 | Design system | SF Symbols 6, Dynamic Type, system color roles + one brand accent | §6. |
 | Haptics | `UIFeedbackGenerator` (`UINotificationFeedbackGenerator`, `UIImpactFeedbackGenerator`) | §6.4. |
-| Push | APNs via `UserNotifications` + interactive notification actions | §9. Backend push-sending is a stub today (see API reference §12) — build the UI/registration path now, but don't block v0.1 on server delivery. |
+| Push | APNs via `UserNotifications` + interactive notification actions | §9. Backend delivery is real (API reference §14) — register the device token on launch. |
 | Widgets / Live Activities | WidgetKit, ActivityKit | §10. P1/P2 — flagged here because they inform data-model and background-refresh decisions made in v0.1. |
 
 ---
@@ -462,14 +462,19 @@ explanation, not just an enum picker), grace period hours (stepper, 1–72).
 
 ## 9. Notifications
 
-Server-side push sending is not implemented yet (API reference §12) — this section specs the
-*client* contract so the app is ready the moment it is.
+Server-side push sending is implemented — real APNs delivery, all 5 PRD §6.7 types (API reference
+§14). After requesting notification permission, register the device token with
+`PATCH /v1/auth/push-token` (§14) — call again with `null` on logout/uninstall-detection to
+unregister. Content below is unchanged: this section specs the *client* contract (payload → UI
+mapping, interactive actions), independent of whether server delivery was live yet when it was
+written.
 
 | Notification | Recipient | Interactive actions (notification-content-extension) |
 |---|---|---|
-| Task due soon (configurable lead time) | Teen | "Mark Done" (calls complete directly from the notification, no app launch) |
+| Task due soon (configurable lead time, household setting) | Teen | "Mark Done" (calls complete directly from the notification, no app launch) |
 | Excuse approved/denied | Teen | Tap → Task Detail |
 | New excuse submitted | Parent | "Approve" / "Deny" (deny opens the app to the comment field — can't fully resolve from the banner since a comment is required) |
+| Series ending soon with tasks outstanding (P1, master PRD §6.7) | Teen | Tap → Series detail |
 | Daily pending-approvals nudge (P1, master PRD §6.7) | Parent | Tap → Inbox |
 
 Interactive "Mark Done" / "Approve" actions are the concrete expression of "interactive" for this

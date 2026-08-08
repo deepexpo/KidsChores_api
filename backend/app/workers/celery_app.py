@@ -12,6 +12,7 @@ celery_app = Celery(
     include=[
         "app.workers.generate_instances",
         "app.workers.notify_digest",
+        "app.workers.reminders",
     ],
 )
 
@@ -34,5 +35,17 @@ celery_app.conf.beat_schedule = {
     "daily-parent-digest": {
         "task": "workers.notify_digest",
         "schedule": crontab(hour=9, minute=0),  # 9am UTC; households handle local time
+    },
+    # Task due-soon reminder (PRD §6.7 P0) — every 15 min so a configurable
+    # lead time (default 60 min) doesn't drift far from when it should fire.
+    "task-due-soon-reminders": {
+        "task": "workers.send_task_reminders",
+        "schedule": crontab(minute="*/15"),
+    },
+    # Series-expiring-with-tasks-outstanding reminder (PRD §6.7 P1) — coarser
+    # cadence is fine, this is a "heads up" not a time-sensitive alert.
+    "series-expiring-reminders": {
+        "task": "workers.send_series_expiring_reminders",
+        "schedule": crontab(hour="*/6", minute=30),
     },
 }
