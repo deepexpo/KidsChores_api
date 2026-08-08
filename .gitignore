@@ -1,0 +1,36 @@
+# Environments — never commit real secrets, only .env.example
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+*.cover
+coverage.xml
+htmlcov/
+
+# Celery beat local schedule persistence (runtime state, not source)
+celerybeat-schedule*
+
+# macOS
+.DS_Store
+
+# Claude Code local tooling (permission audit trail, not project source)
+.claude/
+
+# Xcode / iOS (once the client exists)
+ios/**/xcuserdata/
+ios/**/*.xcuserstate
+ios/DerivedData/
+ios/.build/
+
+# Editors
+.vscode/
+.idea/
