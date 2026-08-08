@@ -38,8 +38,8 @@ Identical to `POST /v1/auth/apple`:
 Creates a new **parent** and their **household** in one call — mirrors how `POST /v1/auth/apple`
 doubles as signup. **Parent-only**: teens are minted by a parent via
 `POST /v1/household/members/teens` (unchanged); a teen self-registering here would create a new
-household rather than attaching to a parent-created profile, since no linking flow exists yet
-(see `docs/api-reference.md` §5 and `docs/ios-prd.md` §16 open question 3).
+household rather than attaching to a parent-created profile — teens should go through the linking
+flow instead (§13 below).
 
 **Request**
 
@@ -591,3 +591,68 @@ The Inbox now shows a **"Reward claims"** section (each with **Fulfil** / **Decl
 approvals. The client **tolerates the endpoint's absence** (treats a failure as "no claims"), so the
 inbox keeps working for task approvals until this ships. Adding `member_name` to the model was the
 only new field. *(This also unblocks the Family "outstanding claims count" from ios-prd §8.2.)*
+
+---
+
+## 13. Teen account linking *(implemented — `app/services/linking.py`, `app/routers/household.py`, `app/routers/auth.py`)*
+
+**Not part of the original client spec** — this closes a gap the API reference (§5) and ios-prd
+(§16 open question 3) had both flagged: a teen profile minted by `POST /v1/household/members/teens`
+had no way to get its own independent login. It worked fine in shared-device PIN mode, but a teen
+completing `POST /v1/auth/register` or `POST /v1/auth/apple` on their own phone would create a
+**second, unrelated household** instead of attaching to the one their parent already set up.
+
+**Flow:** parent generates a short code for a specific teen profile → tells the teen the code
+(text message, verbally, whatever) → teen enters it in their own app along with an email +
+password they choose → that teen's *existing* member row gets real credentials, same id, same
+household, same role. No new household, no data loss, no client-side merge logic needed since
+there was nothing to merge.
+
+### `POST /v1/household/members/{member_id}/link-code`
+
+Parent only.
+
+**Response `200`**
+```json
+{ "code": "482913", "expires_at": "2026-08-09T15:19:47Z" }
+```
+
+- 6-digit numeric code, 24-hour expiry, single-use.
+- Regenerating for the same teen invalidates whatever code was issued before (only one live code
+  per teen).
+- `404` member not found in caller's household · `422` target isn't a teen · `409` this teen
+  already has real credentials (was already linked).
+
+### `POST /v1/auth/link`
+
+Unauthenticated.
+
+**Request**
+```json
+{ "code": "482913", "email": "arjun@example.com", "password": "..." }
+```
+
+Same validation as `register` (`email` min-length/format, `password` min 8 chars). Returns the
+same `AuthTokens` shape as every other auth endpoint on this page — the teen is logged in
+immediately, `member_id`/`household_id` are the **pre-existing** ones, `role` is `"teen"`.
+
+- `404` code doesn't exist, already used, or expired.
+- `409` email already in use by another account, or this profile was already linked (code somehow
+  redeemed for an already-linked member — shouldn't happen given single-use, but checked
+  defensively).
+- Rate-limited **per-IP** (10 / 15 min) and **per-code** (5 / 15 min) — the per-code limit is the
+  one that actually matters against brute-forcing a 6-digit space.
+
+### Client integration
+
+| Client symbol (suggested) | Calls |
+|---|---|
+| `HouseholdService.generateLinkCode(memberID:)` | `POST /v1/household/members/{id}/link-code` |
+| `AuthService.linkAccount(code:email:password:)` | `POST /v1/auth/link` |
+
+Suggested onboarding entry point: alongside "Create account" / "Sign in", add "I have a code from
+my parent" for a teen's first launch on their own device. Verified live end-to-end: parent
+registers → creates teen → generates code → teen redeems with their own email/password → teen logs
+in independently afterward with those same credentials → same household on both sides confirmed.
+Also verified: redeeming a used code returns `404`, and regenerating a code for an already-linked
+teen returns `409`.

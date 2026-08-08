@@ -228,14 +228,46 @@ Parent only. Creates a teen profile. `201`.
 | `pin` | string? | Exactly 4 digits. Shared-device PIN, not a security boundary. |
 
 The new teen has **no login of their own yet** — `auth_subject` is a server-generated placeholder,
-and `password_hash` is unset. There is **no linking flow implemented** for either auth method: a
-teen completing `POST /v1/auth/apple` or `POST /v1/auth/register` on their own device/email would
-create a **second, separate** household rather than attaching to the profile their parent already
-created (`register` in particular always mints a *parent* role — there's no way for an
-unauthenticated endpoint to know the caller is meant to be a teen). Until a linking endpoint
-exists, treat teen profiles as usable only in **shared-device mode** (parent mints the profile,
-teen unlocks it with the PIN on the family iPad/iPhone — see `docs/ios-prd.md`) rather than as an
-independent-login flow.
+and `password_hash` is unset. The profile works in **shared-device mode** immediately (parent mints
+the profile, teen unlocks it with the PIN on the family iPad/iPhone). To let the teen log in
+independently on their own device, use the linking flow below — a teen completing
+`POST /v1/auth/apple` or `POST /v1/auth/register` directly would instead create a **second,
+separate** household (`register` always mints a *parent* role), so don't route teens through those.
+
+### `POST /v1/household/members/{member_id}/link-code`
+Parent only. Generates a short-lived code the teen can redeem to attach their own email/password
+login to this profile. `404` if the member isn't found; `422` if it isn't a teen profile; `409` if
+this teen already has real credentials (only usable once, before linking).
+
+```json
+{ "code": "482913", "expires_at": "2026-08-09T15:19:47Z" }
+```
+
+- Code is **6 digits**, valid for **24 hours**, and **single-use** — redeeming it (successfully or
+  not) consumes it.
+- Generating a new code for the same teen invalidates any code generated earlier for them (only one
+  valid code per teen at a time).
+- Deliver the code out-of-band — read it to the teen, text it, whatever's convenient. There's no
+  in-app delivery mechanism (no push/SMS integration for this).
+
+### `POST /v1/auth/link`
+Unauthenticated — this is how the teen redeems the code, typically during their own app's
+onboarding ("I have a code from my parent" instead of "Create account").
+
+```json
+{ "code": "482913", "email": "arjun@example.com", "password": "..." }
+```
+
+Returns the same `TokenResponse` shape as `/v1/auth/register` / `/v1/auth/login` — the teen is
+immediately logged in. Critically, `member_id` and `household_id` in the response are the
+**existing** teen profile and the **existing** household — no new household is created, no data
+carries over from a prior placeholder state because there wasn't any (the profile's history, if
+any exists by the time it's linked, is untouched).
+
+`404` for an invalid/expired/already-used code. `409` if the email is already in use by another
+account, or if this profile was already linked by an earlier redemption. Rate-limited per-IP (10 /
+15 min) and per-code (5 / 15 min) — a 6-digit code is brute-forceable given enough attempts, so the
+per-code limit matters more than the per-IP one here.
 
 ### `POST /v1/household/members/{member_id}/verify-pin`
 Any member (in practice, the parent's token, held by the shared device). Full spec:
@@ -672,10 +704,12 @@ client-side.
 | POST | `/v1/auth/refresh` | none (bearer refresh token in body) | — (single-use by design) |
 | POST | `/v1/auth/change-password` | any (authenticated) | no (rate-limited) |
 | POST | `/v1/auth/apple` | none | — |
+| POST | `/v1/auth/link` | none | — (rate-limited, code single-use) |
 | GET | `/v1/household` | any | — |
 | PATCH | `/v1/household` | parent | no |
 | GET | `/v1/household/members` | any | — |
 | POST | `/v1/household/members/teens` | parent | no |
+| POST | `/v1/household/members/{id}/link-code` | parent | no |
 | POST | `/v1/household/members/{id}/verify-pin` | any | — (rate-limited) |
 | DELETE | `/v1/household/members/{id}` | parent | — |
 | GET | `/v1/definitions` | any | — |

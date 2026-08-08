@@ -115,6 +115,17 @@ class VerifyPinResponse(BaseModel):
     pin_set: bool
 
 
+class LinkCodeResponse(BaseModel):
+    code: str
+    expires_at: datetime
+
+
+class LinkAccountRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    email: EmailStr
+    password: str = Field(min_length=8)
+
+
 # ── TaskDefinition ────────────────────────────────────────────────────────────
 
 class TaskDefinitionCreate(BaseModel):

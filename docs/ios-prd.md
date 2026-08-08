@@ -171,10 +171,23 @@ a given avatar (skip straight through for a profile with no PIN set). The endpoi
    server-side against the parent's authenticated session, via `verify-pin` — §4.4 — without
    re-entering the parent's credentials; the PIN is a local-friction gate, not a security boundary,
    per master PRD §6.1).
-5. **Teens do not have their own registration path yet** — per `docs/api-reference.md` §5,
-   `register` always creates a `parent`. Don't put a "Create Account" entry point in front of a
-   teen; teen profiles are created by a parent from the Family tab and used only in shared-device
-   mode until a linking flow exists (§16 open question 3).
+5. **Teens link to a parent-created profile with a code, rather than registering.**
+   `POST /v1/auth/register` always creates a `parent` + new household, so a teen must not land on
+   that path (`docs/auth-endpoints.md` §13). Add a third launch-screen entry point — **"I have a
+   code"** — alongside Sign In / Create Account, for a teen's first launch on their own phone:
+   - Parent generates the code from the Family tab (member detail → "Link this teen's phone" →
+     `POST /v1/household/members/{id}/link-code`), sees a large, easy-to-read-aloud 6-digit code
+     with an expiry note ("valid for 24 hours"), and shares it with the teen however's convenient
+     (text it, say it out loud).
+   - Teen taps "I have a code," enters the 6 digits plus their own email + password, submits to
+     `POST /v1/auth/link`. Success returns the same `AuthTokens` shape as register/login — proceed
+     straight to Today, no interstitial (same as the returning-login case in step 3).
+   - Errors: `404` → "That code isn't valid — ask your parent for a new one" (covers not-found,
+     expired, and already-used, without distinguishing which — no reason to leak that detail).
+     `409` on email → same inline "That email is already in use" as register. `429` → same calm
+     rate-limit copy as step 1.
+   - This profile already existed (parent set its name/birthdate/PIN when creating it) — the
+     linking screen only asks for credentials, not anything already captured.
 
 ---
 
@@ -592,12 +605,10 @@ question in §16) at minimum:
    build ahead of Reports on the theory that it's higher-leverage for teen retention than
    parent-facing analytics — worth validating against actual usage data once v1.0 has real
    households on it, rather than committing now.
-3. **Teen-owned-device linking flow.** API reference §5 flags that there is currently no way for
-   a teen to link their own credentials (Apple ID, or email/password) to a parent-created profile
-   — this blocks the "Arjun has his own iPhone" persona's real usage pattern (master PRD §4) and
-   needs a backend endpoint + a client flow ("Enter the code your parent gave you" or similar)
-   before v1.0, not just shared-device mode. Applies equally regardless of which auth method ends
-   up being primary at that point.
+3. ~~Teen-owned-device linking flow.~~ **Resolved** — `docs/auth-endpoints.md` §13, client flow
+   spec'd in §5 step 5 (code-based linking, "I have a code" entry point). Still Apple-deferred like
+   everything else auth-related, but the email/password version unblocks the "Arjun has his own
+   iPhone" persona (master PRD §4) for v1.0.
 4. **Reward menu UI** (master PRD §6.6, P1) — once the backend has a parent-defined fixed-price
    reward menu, does the claim composer become a picker-first, free-text-fallback UI, or stay
    free-text-first with the menu as a shortcut row above it? Depends on how populated menus turn

@@ -13,11 +13,13 @@ from app.db.models import AuthProvider, Household, Member, MemberRole
 from app.schemas.schemas import (
     HouseholdResponse,
     HouseholdUpdate,
+    LinkCodeResponse,
     MemberResponse,
     TeenProfileCreate,
     VerifyPinRequest,
     VerifyPinResponse,
 )
+from app.services.linking import create_link_code
 from app.services.rate_limit import RateLimitExceededError, check_rate_limit
 
 router = APIRouter(prefix="/v1/household", tags=["household"])
@@ -106,6 +108,44 @@ async def create_teen_profile(
     db.add(teen)
     await db.flush()
     return teen
+
+
+@router.post("/members/{member_id}/link-code", response_model=LinkCodeResponse)
+async def generate_link_code(
+    member_id: str,
+    parent: Member = Depends(require_parent),
+    household: Household = Depends(get_current_household),
+    db: AsyncSession = Depends(get_db),
+) -> LinkCodeResponse:
+    """
+    Generates a short-lived code a teen can redeem (POST /v1/auth/link) to
+    attach their own email/password login to this existing profile, instead
+    of creating a brand-new household via /v1/auth/register. Only valid for a
+    teen who hasn't linked yet (still on the placeholder auth_subject minted
+    by create_teen_profile) — a linked teen already has real credentials and
+    should just log in normally.
+    """
+    result = await db.execute(
+        select(Member).where(
+            Member.id == member_id,
+            Member.household_id == household.id,
+            Member.archived_at.is_(None),
+        )
+    )
+    target = result.scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=404, detail="Member not found.")
+    if target.role != MemberRole.teen:
+        raise HTTPException(
+            status_code=422, detail="Only teen profiles can be linked."
+        )
+    if not target.auth_subject.startswith(f"pending-{household.id}-"):
+        raise HTTPException(
+            status_code=409, detail="This profile already has its own login."
+        )
+
+    code, expires_at = await create_link_code(target.id)
+    return LinkCodeResponse(code=code, expires_at=expires_at)
 
 
 @router.post("/members/{member_id}/verify-pin", response_model=VerifyPinResponse)
