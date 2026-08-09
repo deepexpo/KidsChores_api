@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -10,6 +11,17 @@ import httpx
 from jose import JWTError, jwt
 
 from app.config import settings
+
+logger = logging.getLogger("auth.apple")
+if not logger.handlers:
+    # Same rationale as app/services/push.py: the root logger defaults to
+    # WARNING, so this INFO-level diagnostic would otherwise be silently
+    # dropped in an app that hasn't configured logging itself.
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s auth.apple %(levelname)s: %(message)s"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 
 def create_access_token(member_id: str, household_id: str) -> str:
@@ -62,28 +74,47 @@ async def validate_apple_identity_token(identity_token: str) -> dict[str, Any]:
     In production, fetch Apple's public keys from https://appleid.apple.com/auth/keys
     and verify the signature. For v0.1 we decode without verification in dev mode.
     """
-    # Fetch Apple's public keys
-    async with httpx.AsyncClient() as client:
-        resp = await client.get("https://appleid.apple.com/auth/keys")
-        resp.raise_for_status()
-        jwks = resp.json()
+    try:
+        # Fetch Apple's public keys
+        async with httpx.AsyncClient() as client:
+            resp = await client.get("https://appleid.apple.com/auth/keys")
+            resp.raise_for_status()
+            jwks = resp.json()
 
-    # Decode header to get kid
-    header = jwt.get_unverified_header(identity_token)
-    kid = header.get("kid")
+        # Decode header to get kid
+        header = jwt.get_unverified_header(identity_token)
+        kid = header.get("kid")
 
-    # Find matching key
-    key = next((k for k in jwks["keys"] if k["kid"] == kid), None)
-    if key is None:
-        raise ValueError("Apple public key not found for kid.")
+        # Find matching key
+        key = next((k for k in jwks["keys"] if k["kid"] == kid), None)
+        if key is None:
+            raise ValueError("Apple public key not found for kid.")
 
-    from jose.backends import RSAKey
-    public_key = RSAKey(key, algorithm="RS256")
+        from jose.backends import RSAKey
+        public_key = RSAKey(key, algorithm="RS256")
 
-    payload: dict[str, Any] = jwt.decode(
-        identity_token,
-        public_key,
-        algorithms=["RS256"],
-        audience=settings.apple_bundle_id,
-    )
-    return payload
+        payload: dict[str, Any] = jwt.decode(
+            identity_token,
+            public_key,
+            algorithms=["RS256"],
+            audience=settings.apple_bundle_id,
+        )
+        return payload
+    except Exception as exc:
+        # Diagnostic only — logs the token's *unverified* claims (never trusted
+        # for auth) so a rejection's root cause (aud mismatch, expired token,
+        # wrong kid, ...) is visible in server logs without needing the client
+        # to hand over a live token out of band.
+        try:
+            unverified = jwt.get_unverified_claims(identity_token)
+        except Exception:
+            unverified = {}
+        logger.warning(
+            "apple identity token rejected: %s | expected_aud=%s got_aud=%s iss=%s exp=%s",
+            exc,
+            settings.apple_bundle_id,
+            unverified.get("aud"),
+            unverified.get("iss"),
+            unverified.get("exp"),
+        )
+        raise
