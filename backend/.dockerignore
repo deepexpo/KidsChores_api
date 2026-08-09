@@ -1,0 +1,28 @@
+# Local dev secrets — never bake these into the image. Fly injects real
+# config via secrets/[env], not a .env file; a local .env silently overrides
+# pydantic-settings class defaults for anything not covered by a Fly secret
+# (this is exactly how a stale APPLE_BUNDLE_ID in a local .env shipped to
+# production and broke Sign in with Apple).
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+*.cover
+coverage.xml
+htmlcov/
+
+# VCS / editor / OS cruft — irrelevant to the image, just bloats build context
+.git/
+.gitignore
+.DS_Store
+.vscode/
+.idea/
