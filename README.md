@@ -43,9 +43,10 @@ This isn't a CRUD scaffold. A few things that came out of actually building it:
   ([`grace_remaining()`](backend/app/services/state_machine.py)) is reused by both the
   interactive review endpoint *and* the nightly batch job that expires overdue tasks. They used to
   disagree; see the bugs section below.
-- **It's actually deployed**, not just `docker-compose up`-able — Fly.io, Postgres, Redis, Celery
-  beat for scheduled jobs, cost-optimized (scale-to-zero web tier, single always-on worker for the
-  scheduler). `fly.toml` and the Dockerfile are in this repo, not hand-waved.
+- **It's actually deployed**, not just `docker-compose up`-able — Fly.io for the API/worker,
+  Supabase for Postgres, Redis, Celery beat for scheduled jobs, cost-optimized (scale-to-zero web
+  tier, single always-on worker for the scheduler). `fly.toml` and the Dockerfile are in this repo,
+  not hand-waved.
 - **61 tests, ruff + mypy --strict clean, on a CI pipeline that actually gates.** Not a `# TODO:
   add tests` placeholder.
 
@@ -61,6 +62,8 @@ The kind of thing that only shows up once code is exercised for real, not just r
 | Missing eager-load under async SQLAlchemy | task completion → ledger write | `MissingGreenlet` on the very first real "complete a task" call — the core product loop was broken until this was fixed |
 | No household scoping on claim resolution | `POST /v1/wallet/claims/{id}/resolve` | A parent could resolve a reward claim belonging to a *different* household by id |
 | Async SQLAlchemy engine reused across event loops | Celery worker, any periodic task's 2nd+ run | A persistent worker process calling `asyncio.run()` per task invocation crashed with "Future attached to a different loop" on the second run of *any* scheduled job — invisible until a job actually ran twice in the same worker's lifetime, which a 15-minute-interval reminder job hits almost immediately |
+| Local `.env` baked into the production Docker image | No `.dockerignore` existed | `COPY . .` shipped a stale local dev `.env` straight into every deployed image — `.gitignore` has zero effect on `docker build`. A leftover placeholder `APPLE_BUNDLE_ID` in it silently overrode the correct value at runtime (env-file beats a pydantic-settings class default), breaking Sign in with Apple in a way that looked like a config bug, not a build-context leak |
+| `%` in a URL-encoded DB password breaks Alembic | `env.py`'s `config.set_main_option` | `ConfigParser`'s own interpolation syntax also uses `%`, so a `%23`-encoded character in the password raised `ValueError` before any migration could run — needs escaping to `%%` going in, which `ConfigParser` correctly unescapes back on read |
 
 Every one of these was invisible from reading the code casually. They only surfaced by actually
 standing up Postgres + Redis and driving real requests through the state machine end to end.
@@ -109,11 +112,11 @@ stateDiagram-v2
 | Layer | Tech | Notes |
 |---|---|---|
 | Backend API | FastAPI (Python 3.12), SQLAlchemy 2.0 async | fully async end-to-end, `asyncpg` driver |
-| Database | PostgreSQL 16 | partial unique indexes for idempotency; Alembic migrations |
+| Database | PostgreSQL (Supabase, managed) | partial unique indexes for idempotency; Alembic migrations |
 | Job queue | Celery + Redis (Upstash in prod) | nightly instance generation, notification scheduling |
 | Push | APNs, token-based Auth Key | 5 notification types (PRD §6.7), config-gated — logs instead of sending if unconfigured |
 | Auth | Email + password (argon2id) — Sign in with Apple implemented, deferred client-side | JWT access + rotating single-use refresh tokens |
-| Hosting | Fly.io | see [`backend/fly.toml`](backend/fly.toml) |
+| Hosting | Fly.io (API + worker), Supabase (database) | see [`backend/fly.toml`](backend/fly.toml) |
 | iOS client | SwiftUI, iOS 17+ (spec complete, not yet built) | full UI/UX spec in [`docs/ios-prd.md`](docs/ios-prd.md) |
 
 ## API surface
