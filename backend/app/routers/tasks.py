@@ -70,6 +70,30 @@ def _today_bounds(household: Household) -> tuple[datetime, datetime]:
     return start_local.astimezone(pytz.utc), end_local.astimezone(pytz.utc)
 
 
+async def _resolve_target_id(
+    member_id: str | None, member: Member, household: Household, db: AsyncSession
+) -> str:
+    """
+    Resolves the effective target member for /today and /week. A parent may
+    query another member's tasks, but — critically — only within their own
+    household: the role check alone doesn't prove target_id belongs to the
+    caller's household, and this codebase has already had one real,
+    live-confirmed IDOR from exactly that gap (see wallet.py's
+    _assert_wallet_access) that let any parent read any other household's
+    member data by id alone.
+    """
+    if not member_id or member_id == member.id:
+        return member.id
+    if member.role != MemberRole.parent:
+        raise HTTPException(status_code=403, detail="Only parents can view other members.")
+    result = await db.execute(
+        select(Member.id).where(Member.id == member_id, Member.household_id == household.id)
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Member not found.")
+    return member_id
+
+
 def _week_bounds(start_date_str: str, household: Household) -> tuple[datetime, datetime]:
     tz = pytz.timezone(household.timezone)
     start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
@@ -115,11 +139,7 @@ async def get_today_tasks(
     Returns today's task instances for the requesting teen,
     or a specific member if the caller is a parent.
     """
-    target_id = member.id
-    if member_id and member_id != member.id:
-        if member.role != MemberRole.parent:
-            raise HTTPException(status_code=403, detail="Only parents can view other members.")
-        target_id = member_id
+    target_id = await _resolve_target_id(member_id, member, household, db)
 
     start, end = _today_bounds(household)
     result = await db.execute(
@@ -144,11 +164,7 @@ async def get_week_tasks(
     household: Household = Depends(get_current_household),
     db: AsyncSession = Depends(get_db),
 ) -> list[TaskInstance]:
-    target_id = member.id
-    if member_id and member_id != member.id:
-        if member.role != MemberRole.parent:
-            raise HTTPException(status_code=403, detail="Only parents can view other members.")
-        target_id = member_id
+    target_id = await _resolve_target_id(member_id, member, household, db)
 
     week_start, week_end = _week_bounds(start, household)
     result = await db.execute(

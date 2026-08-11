@@ -63,6 +63,18 @@ async def create_series(
             detail="One or more task definitions not found in this household.",
         )
 
+    # Same check for assignee_id — otherwise a series (and its bonus payout)
+    # could be pointed at a member_id belonging to a different household.
+    assignee_result = await db.execute(
+        select(Member.id).where(
+            Member.id == body.assignee_id, Member.household_id == household.id
+        )
+    )
+    if assignee_result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=422, detail="assignee_id is not a member of this household."
+        )
+
     series = Series(
         household_id=household.id,
         name=body.name,

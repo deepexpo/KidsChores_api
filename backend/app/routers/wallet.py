@@ -84,7 +84,7 @@ async def get_wallet(
     household: Household = Depends(get_current_household),
     db: AsyncSession = Depends(get_db),
 ) -> WalletResponse:
-    _assert_access(member, member_id)
+    await _assert_wallet_access(member, member_id, household, db)
     ledger = LedgerService(db)
     balance = await ledger.current_balance(member_id)
 
@@ -111,9 +111,10 @@ async def get_ledger(
     limit: int = 50,
     offset: int = 0,
     member: Member = Depends(get_current_member),
+    household: Household = Depends(get_current_household),
     db: AsyncSession = Depends(get_db),
 ) -> list[LedgerEntry]:
-    _assert_access(member, member_id)
+    await _assert_wallet_access(member, member_id, household, db)
     ledger = LedgerService(db)
     return await ledger.get_ledger(member_id, limit=limit, offset=offset)
 
@@ -195,9 +196,10 @@ async def create_savings_goal(
     member_id: str,
     body: SavingsGoalCreate,
     member: Member = Depends(get_current_member),
+    household: Household = Depends(get_current_household),
     db: AsyncSession = Depends(get_db),
 ) -> SavingsGoal:
-    _assert_access(member, member_id)
+    await _assert_wallet_access(member, member_id, household, db)
     goal = SavingsGoal(member_id=member_id, **body.model_dump())
     db.add(goal)
     await db.flush()
@@ -228,10 +230,20 @@ def _to_claim_response(claim: Claim, member_name: str) -> ClaimResponse:
     )
 
 
-def _assert_access(member: Member, target_member_id: str) -> None:
-    """Teens can only access their own wallet; parents can access any."""
+async def _assert_wallet_access(
+    member: Member, target_member_id: str, household: Household, db: AsyncSession
+) -> None:
+    """
+    Teens can only access their own wallet. Parents can access any wallet
+    *within their own household* — critically, this must never allow a
+    parent to reach a member_id belonging to a different household (a real,
+    live-confirmed IDOR this fixed: any authenticated parent could read any
+    other household's wallet/ledger by member_id alone, since the previous
+    check only verified the caller's role, never the target's household).
+    """
     if member.role == MemberRole.teen and member.id != target_member_id:
         raise HTTPException(status_code=403, detail="You can only view your own wallet.")
+    await _assert_same_household(target_member_id, household, db)
 
 
 async def _assert_same_household(

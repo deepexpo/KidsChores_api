@@ -41,6 +41,21 @@ async def create_definition(
     household: Household = Depends(get_current_household),
     db: AsyncSession = Depends(get_db),
 ) -> TaskDefinition:
+    # Without this, a parent could assign a task to any member_id at all —
+    # including one belonging to a different household, injecting a task
+    # straight into a stranger's teen's Today view (an IDOR found and fixed
+    # session-wide; see wallet.py's _assert_wallet_access for the read-side
+    # version of the same gap).
+    assignee_result = await db.execute(
+        select(Member.id).where(
+            Member.id == body.assignee_id, Member.household_id == household.id
+        )
+    )
+    if assignee_result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=422, detail="assignee_id is not a member of this household."
+        )
+
     definition = TaskDefinition(
         household_id=household.id,
         created_by=parent.id,
